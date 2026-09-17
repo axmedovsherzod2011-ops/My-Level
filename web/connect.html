@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Connect PC — My-Level</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell narrow">
+    <a class="back" href="/">← Dashboard</a>
+    <section class="card">
+      <div class="eyebrow">DEVICE ENROLLMENT</div>
+      <h1>Connect a PC</h1>
+      <p>Generate a one-time code and enter it in the authorized Windows Agent.</p>
+      <button id="generate" class="button">Generate pairing code</button>
+      <div id="code" class="code">------</div>
+      <p id="expires" class="muted"></p>
+      <div class="notice">Screen sharing will require an explicit action on the target PC.</div>
+    </section>
+  </main>
+  <script>
+    const button = document.querySelector('#generate');
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/pairing-code', { method: 'POST' });
+        const data = await response.json();
+        document.querySelector('#code').textContent = data.code;
+        document.querySelector('#expires').textContent = 'This code expires in 5 minutes and can be used once.';
+      } finally { button.disabled = false; }
+    };
+  </script>
+</body>
+</html>
