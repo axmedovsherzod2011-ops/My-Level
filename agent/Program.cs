@@ -35,6 +35,16 @@ var sharing = consent == DialogResult.Yes;
 var context = new AgentContext(serverUrl, pairingCode, deviceId, deviceToken, stateFile, sharing);
 Application.Run(context);
 
+static AgentState LoadState(string path)
+{
+    try
+    {
+        var json = File.ReadAllText(path);
+        return JsonSerializer.Deserialize<AgentState>(json) ?? new AgentState(null, null);
+    }
+    catch { return new AgentState(null, null); }
+}
+
 static string? PromptText(string title, string text, string defaultValue)
 {
     using var form = new Form
@@ -284,6 +294,6 @@ sealed class AgentContext : ApplicationContext
         output.Save(ms, encoder, parameters);
         return ms.ToArray();
     }
-
-    private record AgentState(string? DeviceId, string? DeviceToken);
 }
+
+record AgentState(string? DeviceId, string? DeviceToken);
