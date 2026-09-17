@@ -9,7 +9,6 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 const string defaultServer = "wss://my-level-api.onrender.com";
-const string recoveryTaskName = "My-Level\\Agent Recovery";
 var serverUrl = Environment.GetEnvironmentVariable("MY_LEVEL_SERVER") ?? defaultServer;
 var pairingCode = Environment.GetEnvironmentVariable("MY_LEVEL_PAIRING_CODE");
 var stateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "My-Level");
@@ -45,10 +44,9 @@ else
     SaveState(stateFile, state with { DeviceId = deviceId, DeviceToken = deviceToken });
 }
 
-// Recovery is intentionally installed only after explicit screen-sharing authorization.
-// Windows Task Scheduler starts this same visible tray app at logon and restarts it
-// after an unexpected termination. A normal Exit from the tray removes the task.
-InstallRecoveryTask();
+// Install recovery only after explicit authorization. The task is visible in
+// Windows Task Scheduler and is limited to this interactive Windows user.
+RecoveryTask.Install(Environment.ProcessPath);
 RemoveLegacyStartupEntry();
 
 var context = new AgentContext(serverUrl, pairingCode, deviceId, deviceToken, stateFile, sharing);
@@ -66,46 +64,6 @@ static AgentState LoadState(string path)
 
 static void SaveState(string path, AgentState state) => File.WriteAllText(path, JsonSerializer.Serialize(state));
 
-static void InstallRecoveryTask()
-{
-    try
-    {
-        var exe = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(exe)) return;
-
-        var userId = $"{Environment.UserDomainName}\\{Environment.UserName}";
-        var escapedExe = System.Security.SecurityElement.Escape(exe);
-        var escapedUser = System.Security.SecurityElement.Escape(userId);
-        var startBoundary = DateTime.Now.ToString("s");
-        var xml = $"<?xml version=\"1.0\" encoding=\"UTF-16\"?>" +
-                  $"<Task xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">" +
-                  "<RegistrationInfo><Author>My-Level</Author><Description>My-Level authorized screen-sharing agent recovery.</Description></RegistrationInfo>" +
-                  $"<Triggers><LogonTrigger><StartBoundary>{startBoundary}</StartBoundary><Enabled>true</Enabled><UserId>{escapedUser}</UserId></LogonTrigger></Triggers>" +
-                  "<Principals><Principal id=\"Author\"><UserId>" + escapedUser + "</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>" +
-                  "<Settings><Enabled>true</Enabled><AllowStartOnDemand>true</AllowStartOnDemand><AllowHardTerminate>true</AllowHardTerminate><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" +
-                  "<RestartOnFailure><Interval>PT1M</Interval><Count>10</Count></RestartOnFailure><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><StartWhenAvailable>true</StartWhenAvailable></Settings>" +
-                  "<Actions Context=\"Author\"><Exec><Command>" + escapedExe + "</Command></Exec></Actions>" +
-                  "</Task>";
-
-        var xmlPath = Path.Combine(Path.GetTempPath(), $"My-Level-{Guid.NewGuid():N}.xml");
-        File.WriteAllText(xmlPath, xml, Encoding.Unicode);
-        try
-        {
-            RunSchtasks($"/Create /XML \"{xmlPath}\" /TN \"My-Level\\Agent Recovery\" /F");
-        }
-        finally
-        {
-            try { File.Delete(xmlPath); } catch { }
-        }
-    }
-    catch { }
-}
-
-static void RemoveRecoveryTask()
-{
-    try { RunSchtasks("/Delete /TN \"My-Level\\Agent Recovery\" /F"); } catch { }
-}
-
 static void RemoveLegacyStartupEntry()
 {
     try
@@ -114,21 +72,6 @@ static void RemoveLegacyStartupEntry()
         key?.DeleteValue("My-Level", false);
     }
     catch { }
-}
-
-static void RunSchtasks(string arguments)
-{
-    using var process = Process.Start(new ProcessStartInfo
-    {
-        FileName = Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
-        Arguments = arguments,
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        RedirectStandardOutput = true,
-        RedirectStandardError = true
-    });
-    if (process is null) return;
-    process.WaitForExit(5000);
 }
 
 static string? PromptText(string title, string text, string defaultValue)
@@ -163,7 +106,6 @@ sealed class AgentContext : ApplicationContext
     private readonly NotifyIcon tray;
     private readonly CancellationTokenSource stop = new();
     private readonly bool sharing;
-    private bool intentionalExit;
 
     public AgentContext(string serverUrl, string? pairingCode, string deviceId, string? deviceToken, string stateFile, bool sharing)
     {
@@ -188,7 +130,6 @@ sealed class AgentContext : ApplicationContext
             ContextMenuStrip = menu
         };
         tray.DoubleClick += (_, _) => ShowStatus();
-
         _ = RunAsync();
     }
 
@@ -196,7 +137,7 @@ sealed class AgentContext : ApplicationContext
     {
         MessageBox.Show(
             sharing
-                ? "My-Level is running in the background.\n\nScreen sharing is ON.\n\nUse the My-Level admin page to view this authorized computer.\n\nIf the agent stops unexpectedly, Windows will restart it automatically.\n\nTo stop sharing completely, choose Exit My-Level from the tray menu."
+                ? "My-Level is running in the background.\n\nScreen sharing is ON.\n\nUse the My-Level admin page to view this authorized computer.\n\nIf the agent crashes or is terminated unexpectedly, Windows will restart it automatically.\n\nTo stop sharing completely, choose Exit My-Level from the tray menu."
                 : "My-Level is running in the background.\n\nScreen sharing is OFF.",
             "My-Level",
             MessageBoxButtons.OK,
@@ -205,9 +146,8 @@ sealed class AgentContext : ApplicationContext
 
     private void ExitAgent()
     {
-        intentionalExit = true;
         stop.Cancel();
-        RemoveRecoveryTask();
+        RecoveryTask.Remove();
         tray.Visible = false;
         tray.Dispose();
         ExitThread();
@@ -247,7 +187,7 @@ sealed class AgentContext : ApplicationContext
                         return;
                     }
                     deviceToken = registeredToken;
-                    SaveState(stateFile, new AgentState(deviceId, deviceToken, sharing));
+                    File.WriteAllText(stateFile, JsonSerializer.Serialize(new AgentState(deviceId, deviceToken, sharing)));
                 }
                 else
                 {
@@ -380,6 +320,56 @@ sealed class AgentContext : ApplicationContext
         parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 55L);
         output.Save(ms, encoder, parameters);
         return ms.ToArray();
+    }
+}
+
+static class RecoveryTask
+{
+    private const string TaskName = "My-Level\\Agent Recovery";
+
+    public static void Install(string? exe)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(exe)) return;
+            var userId = $"{Environment.UserDomainName}\\{Environment.UserName}";
+            var escapedExe = System.Security.SecurityElement.Escape(exe);
+            var escapedUser = System.Security.SecurityElement.Escape(userId);
+            var startBoundary = DateTime.Now.ToString("s");
+            var xml = $"<?xml version=\"1.0\" encoding=\"UTF-16\"?>" +
+                      $"<Task xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">" +
+                      "<RegistrationInfo><Author>My-Level</Author><Description>My-Level authorized screen-sharing agent recovery.</Description></RegistrationInfo>" +
+                      $"<Triggers><LogonTrigger><StartBoundary>{startBoundary}</StartBoundary><Enabled>true</Enabled><UserId>{escapedUser}</UserId></LogonTrigger></Triggers>" +
+                      "<Principals><Principal id=\"Author\"><UserId>" + escapedUser + "</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>" +
+                      "<Settings><Enabled>true</Enabled><AllowStartOnDemand>true</AllowStartOnDemand><AllowHardTerminate>true</AllowHardTerminate><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" +
+                      "<RestartOnFailure><Interval>PT1M</Interval><Count>10</Count></RestartOnFailure><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><StartWhenAvailable>true</StartWhenAvailable></Settings>" +
+                      "<Actions Context=\"Author\"><Exec><Command>" + escapedExe + "</Command></Exec></Actions>" +
+                      "</Task>";
+            var xmlPath = Path.Combine(Path.GetTempPath(), $"My-Level-{Guid.NewGuid():N}.xml");
+            File.WriteAllText(xmlPath, xml, Encoding.Unicode);
+            try { RunSchtasks($"/Create /XML \"{xmlPath}\" /TN \"{TaskName}\" /F"); }
+            finally { try { File.Delete(xmlPath); } catch { } }
+        }
+        catch { }
+    }
+
+    public static void Remove()
+    {
+        try { RunSchtasks($"/Delete /TN \"{TaskName}\" /F"); } catch { }
+    }
+
+    private static void RunSchtasks(string arguments)
+    {
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
+            Arguments = arguments,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        });
+        process?.WaitForExit(5000);
     }
 }
 
