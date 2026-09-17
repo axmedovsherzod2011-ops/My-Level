@@ -206,11 +206,12 @@ sealed class AgentContext : ApplicationContext
         {
             var message = await ReceiveJson(ws, cancellationToken);
             if (message is null) break;
-            var type = GetString(message, "type");
+            var value = message.Value;
+            var type = GetString(value, "type");
             try
             {
-                if (type == "webrtc.offer") await HandleOffer(ws, message, cancellationToken);
-                else if (type == "webrtc.candidate") HandleCandidate(message);
+                if (type == "webrtc.offer") await HandleOffer(ws, value, cancellationToken);
+                else if (type == "webrtc.candidate") HandleCandidate(value);
                 else if (type == "webrtc.stop") ClosePeer();
             }
             catch (Exception ex)
