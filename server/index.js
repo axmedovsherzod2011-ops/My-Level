@@ -8,7 +8,6 @@ import crypto from "node:crypto";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 const PORT = Number(process.env.PORT || 3000);
-
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -16,16 +15,22 @@ const devices = new Map();
 const pairingCodes = new Map();
 
 app.use(express.json());
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allowed = !origin || origin === "https://axmedovsherzod2011-ops.github.io" || origin.endsWith(".pages.dev") || origin.endsWith(".workers.dev");
+  if (allowed) {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  }
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 app.use(express.static(path.join(ROOT, "web")));
 
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "my-level-server", time: new Date().toISOString() });
-});
-
-app.get("/api/devices", (_req, res) => {
-  res.json([...devices.values()].map(publicDevice));
-});
-
+app.get("/api/health", (_req, res) => res.json({ ok: true, service: "my-level-server", time: new Date().toISOString() }));
+app.get("/api/devices", (_req, res) => res.json([...devices.values()].map(publicDevice)));
 app.post("/api/pairing-code", (_req, res) => {
   const code = crypto.randomBytes(3).toString("hex").toUpperCase();
   const expiresAt = Date.now() + 5 * 60 * 1000;
@@ -46,15 +51,25 @@ function publicDevice(device) {
 
 function broadcastDevices() {
   const payload = JSON.stringify({ type: "devices", devices: [...devices.values()].map(publicDevice) });
-  for (const ws of wss.clients) {
-    if (ws.readyState === 1 && ws.role === "admin") ws.send(payload);
-  }
+  for (const ws of wss.clients) if (ws.readyState === 1 && ws.role === "admin") ws.send(payload);
 }
 
 wss.on("connection", (ws) => {
   ws.role = "unknown";
 
-  ws.on("message", (raw) => {
+  ws.on("message", (raw, isBinary) => {
+    if (isBinary) {
+      if (ws.role !== "agent" || !ws.deviceId) return;
+      const device = devices.get(ws.deviceId);
+      if (!device || !device.sharing) return;
+      for (const client of wss.clients) {
+        if (client.readyState === 1 && client.role === "admin" && client.viewDeviceId === ws.deviceId) {
+          client.send(raw, { binary: true });
+        }
+      }
+      return;
+    }
+
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
 
@@ -66,9 +81,10 @@ wss.on("connection", (ws) => {
         ws.send(JSON.stringify({ type: "error", message: "Invalid or expired pairing code" }));
         return;
       }
-
       pairingCodes.delete(code);
       const id = String(msg.deviceId || crypto.randomUUID());
+      const old = devices.get(id);
+      if (old?.ws && old.ws !== ws) old.ws.close();
       const device = {
         id,
         name: String(msg.name || "Windows PC").slice(0, 100),
@@ -77,7 +93,6 @@ wss.on("connection", (ws) => {
         sharing: false,
         ws
       };
-
       devices.set(id, device);
       ws.role = "agent";
       ws.deviceId = id;
@@ -89,6 +104,17 @@ wss.on("connection", (ws) => {
     if (msg.type === "admin.connect") {
       ws.role = "admin";
       ws.send(JSON.stringify({ type: "devices", devices: [...devices.values()].map(publicDevice) }));
+      return;
+    }
+
+    if (msg.type === "admin.view") {
+      ws.role = "admin";
+      ws.viewDeviceId = String(msg.deviceId || "");
+      return;
+    }
+
+    if (msg.type === "admin.stop-view") {
+      ws.viewDeviceId = null;
       return;
     }
 
@@ -123,11 +149,7 @@ wss.on("connection", (ws) => {
 
 setInterval(() => {
   const now = Date.now();
-  for (const [code, item] of pairingCodes) {
-    if (item.expiresAt <= now) pairingCodes.delete(code);
-  }
+  for (const [code, item] of pairingCodes) if (item.expiresAt <= now) pairingCodes.delete(code);
 }, 30_000);
 
-server.listen(PORT, () => {
-  console.log(`My-Level server listening on http://localhost:${PORT}`);
-});
+server.listen(PORT, () => console.log(`My-Level server listening on port ${PORT}`));
