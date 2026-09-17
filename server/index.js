@@ -1,7 +1,7 @@
 import express from "express";
 import http from "node:http";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath } from "url";
 import { WebSocketServer } from "ws";
 import crypto from "node:crypto";
 
@@ -78,39 +78,136 @@ function broadcastDevices() {
   }
 }
 
+function attachAgent(ws, device) {
+  if (device.ws && device.ws !== ws && device.ws.readyState === 1) {
+    try { device.ws.close(1000, "Reconnected from another session"); } catch {}
+  }
+  device.ws = ws;
+  device.lastSeen = new Date().toISOString();
+  ws.role = "agent";
+  ws.deviceId = device.id;
+  ws.send(JSON.stringify({ type: "agent.connected", deviceId: device.id }));
+  broadcastDevices();
+}
+
 wss.on("connection", ws => {
   ws.role = "unknown";
+  ws.on("error", () => {});
   ws.on("message", (raw, isBinary) => {
     if (isBinary) {
       if (ws.role !== "agent" || !ws.deviceId) return;
       const device = devices.get(ws.deviceId);
-      if (!device || !device.sharing) return;
-      for (const client of wss.clients) if (client.readyState === 1 && client.role === "admin" && client.viewDeviceId === ws.deviceId) client.send(raw, { binary: true });
+      if (!device || device.ws !== ws || !device.sharing) return;
+      for (const client of wss.clients) {
+        if (client.readyState === 1 && client.role === "admin" && client.viewDeviceId === ws.deviceId) {
+          try { client.send(raw, { binary: true }); } catch {}
+        }
+      }
       return;
     }
-    let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+
+    let msg;
+    try { msg = JSON.parse(raw.toString()); } catch { return; }
 
     if (msg.type === "agent.register") {
       const code = String(msg.pairingCode || "").toUpperCase();
       const pairing = pairingCodes.get(code);
-      if (!pairing || pairing.expiresAt < Date.now()) { pairingCodes.delete(code); ws.send(JSON.stringify({ type: "error", message: "Invalid or expired pairing code" })); return; }
+      if (!pairing || pairing.expiresAt < Date.now()) {
+        pairingCodes.delete(code);
+        ws.send(JSON.stringify({ type: "error", message: "Invalid or expired pairing code" }));
+        return;
+      }
       pairingCodes.delete(code);
-      const id = String(msg.deviceId || crypto.randomUUID());
-      const old = devices.get(id); if (old?.ws && old.ws !== ws) old.ws.close();
-      const device = { id, owner: pairing.owner, name: String(msg.name || "Windows PC").slice(0, 100), platform: String(msg.platform || "windows").slice(0, 30), lastSeen: new Date().toISOString(), sharing: false, ws };
-      devices.set(id, device); ws.role = "agent"; ws.deviceId = id; ws.send(JSON.stringify({ type: "agent.registered", deviceId: id })); broadcastDevices(); return;
+      const id = String(msg.deviceId || crypto.randomUUID()).slice(0, 128);
+      const device = devices.get(id) || {
+        id,
+        owner: pairing.owner,
+        deviceToken: token(),
+        name: "Windows PC",
+        platform: "windows",
+        lastSeen: new Date().toISOString(),
+        sharing: false,
+        ws: null
+      };
+      device.owner = pairing.owner;
+      device.name = String(msg.name || device.name || "Windows PC").slice(0, 100);
+      device.platform = String(msg.platform || device.platform || "windows").slice(0, 30);
+      devices.set(id, device);
+      attachAgent(ws, device);
+      ws.send(JSON.stringify({ type: "agent.registered", deviceId: id, deviceToken: device.deviceToken }));
+      return;
     }
-    if (msg.type === "user.connect") { ws.role = "user"; ws.owner = String(msg.ownerToken || ""); ws.send(JSON.stringify({ type: "devices", devices: [...devices.values()].filter(d => d.owner === ws.owner).map(publicDevice) })); return; }
-    if (msg.type === "admin.connect" && msg.token && sessions.has(String(msg.token))) { ws.role = "admin"; ws.send(JSON.stringify({ type: "devices", devices: [...devices.values()].map(publicDevice) })); return; }
-    if (msg.type === "admin.view" && ws.role === "admin") { ws.viewDeviceId = String(msg.deviceId || ""); return; }
-    if (msg.type === "admin.stop-view" && ws.role === "admin") { ws.viewDeviceId = null; return; }
+
+    if (msg.type === "agent.resume") {
+      const id = String(msg.deviceId || "").slice(0, 128);
+      const supplied = String(msg.deviceToken || "");
+      const device = devices.get(id);
+      if (!device || !supplied || supplied !== device.deviceToken) {
+        ws.send(JSON.stringify({ type: "error", message: "Agent session expired. Pair this computer again." }));
+        try { ws.close(1008, "Pairing required"); } catch {}
+        return;
+      }
+      attachAgent(ws, device);
+      return;
+    }
+
+    if (msg.type === "user.connect") {
+      ws.role = "user";
+      ws.owner = String(msg.ownerToken || "");
+      ws.send(JSON.stringify({ type: "devices", devices: [...devices.values()].filter(d => d.owner === ws.owner).map(publicDevice) }));
+      return;
+    }
+
+    if (msg.type === "admin.connect" && msg.token && sessions.has(String(msg.token))) {
+      ws.role = "admin";
+      ws.send(JSON.stringify({ type: "devices", devices: [...devices.values()].map(publicDevice) }));
+      return;
+    }
+
+    if (msg.type === "admin.view" && ws.role === "admin") {
+      const id = String(msg.deviceId || "");
+      const device = devices.get(id);
+      ws.viewDeviceId = device?.ws?.readyState === 1 && device.sharing ? id : null;
+      return;
+    }
+
+    if (msg.type === "admin.stop-view" && ws.role === "admin") {
+      ws.viewDeviceId = null;
+      return;
+    }
+
     if (ws.role !== "agent" || !ws.deviceId) return;
-    const device = devices.get(ws.deviceId); if (!device) return;
-    if (msg.type === "agent.heartbeat") { device.lastSeen = new Date().toISOString(); broadcastDevices(); }
-    if (msg.type === "agent.sharing") { device.sharing = Boolean(msg.active); device.lastSeen = new Date().toISOString(); broadcastDevices(); }
+    const device = devices.get(ws.deviceId);
+    if (!device || device.ws !== ws) return;
+
+    if (msg.type === "agent.heartbeat") {
+      device.lastSeen = new Date().toISOString();
+      broadcastDevices();
+    }
+
+    if (msg.type === "agent.sharing") {
+      device.sharing = Boolean(msg.active);
+      device.lastSeen = new Date().toISOString();
+      broadcastDevices();
+    }
   });
-  ws.on("close", () => { if (ws.role !== "agent" || !ws.deviceId) return; const device = devices.get(ws.deviceId); if (device?.ws === ws) { device.ws = null; device.sharing = false; device.lastSeen = new Date().toISOString(); broadcastDevices(); } });
+
+  ws.on("close", () => {
+    if (ws.role !== "agent" || !ws.deviceId) return;
+    const device = devices.get(ws.deviceId);
+    if (device?.ws === ws) {
+      device.ws = null;
+      device.sharing = false;
+      device.lastSeen = new Date().toISOString();
+      broadcastDevices();
+    }
+  });
 });
 
-setInterval(() => { const now = Date.now(); for (const [code, item] of pairingCodes) if (item.expiresAt <= now) pairingCodes.delete(code); for (const [s, item] of sessions) if (now - item.createdAt > 12 * 60 * 60 * 1000) sessions.delete(s); }, 30_000);
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, item] of pairingCodes) if (item.expiresAt <= now) pairingCodes.delete(code);
+  for (const [s, item] of sessions) if (now - item.createdAt > 12 * 60 * 60 * 1000) sessions.delete(s);
+}, 30_000);
+
 server.listen(PORT, () => console.log(`My-Level server listening on port ${PORT}`));
