@@ -27,6 +27,16 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path publish/* -DestinationPath MyLevel-Agent-win-x64.zip -Force
 
+      - name: Move latest tag to current build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" \
+            -f sha="${GITHUB_SHA}" \
+            -F force=true
+
       - name: Publish latest release
         uses: softprops/action-gh-release@v2
         with:
