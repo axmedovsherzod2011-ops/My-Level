@@ -1,3 +1,6 @@
+const API_BASE = 'https://my-level-api.onrender.com';
+const WS_BASE = 'wss://my-level-api.onrender.com';
+
 const root = document.querySelector('#devices');
 const count = document.querySelector('#count');
 const online = document.querySelector('#online');
@@ -14,59 +17,32 @@ function render(devices) {
   sharing.textContent = devices.filter(d => d.sharing).length;
 
   if (!devices.length) {
-    root.innerHTML = `
-      <div class="empty">
-        <div class="empty-icon">⌁</div>
-        <strong>No computers connected yet</strong>
-        <span>Add your first authorized computer to get started.</span>
-      </div>`;
+    root.innerHTML = '<div class="empty"><div class="empty-icon">⌁</div><strong>No computers connected yet</strong><span>Add your first authorized computer to get started.</span></div>';
     return;
   }
 
-  root.innerHTML = devices.map(d => `
-    <article class="device">
-      <div class="device-main">
-        <div class="device-icon">▣</div>
-        <div class="device-copy">
-          <h3>${escapeHtml(d.name)}</h3>
-          <div class="meta">
-            <span>${escapeHtml(d.platform)}</span>
-            <span class="meta-dot"></span>
-            <span>${d.sharing ? 'Screen sharing on' : 'Screen sharing off'}</span>
-          </div>
-        </div>
-      </div>
-      <div class="device-side">
-        <span class="status ${d.status}">${d.status}</span>
-        <button class="view-button" disabled title="Live screen viewing is coming next">View screen</button>
-      </div>
-    </article>`).join('');
+  root.innerHTML = devices.map(d => `<article class="device"><div class="device-main"><div class="device-icon">▣</div><div class="device-copy"><h3>${escapeHtml(d.name)}</h3><div class="meta"><span>${escapeHtml(d.platform)}</span><span class="meta-dot"></span><span>${d.sharing ? 'Screen sharing on' : 'Screen sharing off'}</span></div></div></div><div class="device-side"><span class="status ${d.status}">${d.status}</span><button class="view-button" ${d.status !== 'online' ? 'disabled' : ''} title="Live screen viewing will be enabled with WebRTC">View screen</button></div></article>`).join('');
 }
 
 async function loadDevices() {
   refreshButton.disabled = true;
   try {
-    const response = await fetch('/api/devices', { cache: 'no-store' });
+    const response = await fetch(`${API_BASE}/api/devices`, { cache: 'no-store' });
     if (!response.ok) throw new Error('Failed to load devices');
     render(await response.json());
   } catch {
-    root.innerHTML = '<div class="empty"><div class="empty-icon">!</div><strong>Could not load computers</strong><span>Check that the My-Level server is running.</span></div>';
+    root.innerHTML = '<div class="empty"><div class="empty-icon">!</div><strong>Could not connect to My-Level</strong><span>The backend may be waking up. Try Refresh in a few seconds.</span></div>';
   } finally {
     refreshButton.disabled = false;
   }
 }
 
 refreshButton?.addEventListener('click', loadDevices);
-document.querySelector('#help')?.addEventListener('click', () => {
-  window.alert('Connect a computer with “Add computer”. The Windows Agent will use the one-time pairing code shown there.');
-});
-document.querySelector('#settings')?.addEventListener('click', () => {
-  window.alert('Settings will be available in a later version.');
-});
+document.querySelector('#help')?.addEventListener('click', () => window.alert('Add a computer, enter the one-time pairing code in the Windows Agent, and it will appear here when connected.'));
+document.querySelector('#settings')?.addEventListener('click', () => window.alert('Settings will be available in a later version.'));
 
 function connect() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${protocol}//${location.host}`);
+  const ws = new WebSocket(WS_BASE);
   ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'admin.connect' })));
   ws.addEventListener('message', event => {
     try {
@@ -74,7 +50,7 @@ function connect() {
       if (msg.type === 'devices') render(msg.devices);
     } catch {}
   });
-  ws.addEventListener('close', () => setTimeout(connect, 1500));
+  ws.addEventListener('close', () => setTimeout(connect, 3000));
   ws.addEventListener('error', () => ws.close());
 }
 
