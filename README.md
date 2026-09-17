@@ -45,3 +45,7 @@ For a remote server, set `MY_LEVEL_SERVER` to the server WebSocket URL before st
 This version verifies the clean project structure, server health, WebSocket connection, one-time pairing, device listing, and heartbeats.
 
 Live screen streaming is intentionally not enabled yet. The next stage will add WebRTC plus Windows screen capture with explicit local authorization and a visible sharing indicator.
+
+## Windows release
+
+The Windows Agent release is built automatically from `main` by GitHub Actions.
