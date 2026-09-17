@@ -7,4 +7,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <UseSystemDrawing>true</UseSystemDrawing>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="SIPSorcery" Version="10.0.16" />
+    <PackageReference Include="SIPSorcery.VP8" Version="10.0.16" />
+  </ItemGroup>
 </Project>
