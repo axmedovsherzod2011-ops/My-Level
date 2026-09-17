@@ -5,6 +5,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 const string defaultServer = "wss://my-level-api.onrender.com";
 var serverUrl = Environment.GetEnvironmentVariable("MY_LEVEL_SERVER") ?? defaultServer;
@@ -25,13 +26,27 @@ if (string.IsNullOrWhiteSpace(deviceToken))
     if (string.IsNullOrWhiteSpace(pairingCode)) return;
 }
 
-var consent = MessageBox.Show(
-    "Start screen sharing on this authorized computer?\n\nChoose Yes only if you have authorized My-Level to monitor this PC.\n\nThe agent will run in the Windows notification area (system tray).",
-    "My-Level — Screen sharing",
-    MessageBoxButtons.YesNo,
-    MessageBoxIcon.Information);
+bool sharing;
+if (state.SharingEnabled)
+{
+    sharing = true;
+}
+else
+{
+    var consent = MessageBox.Show(
+        "Start screen sharing on this authorized computer?\n\nChoose Yes only if you have authorized My-Level to monitor this PC.\n\nThe agent will run in the Windows notification area (system tray).",
+        "My-Level — Screen sharing",
+        MessageBoxButtons.YesNo,
+        MessageBoxIcon.Information);
+    sharing = consent == DialogResult.Yes;
+    state = state with { SharingEnabled = sharing };
+    SaveState(stateFile, state with { DeviceId = deviceId, DeviceToken = deviceToken });
+}
 
-var sharing = consent == DialogResult.Yes;
+// Once the user has explicitly authorized this PC, launch My-Level automatically
+// when the same Windows user signs in. The tray icon remains visible while it runs.
+SetStartWithWindows(true);
+
 var context = new AgentContext(serverUrl, pairingCode, deviceId, deviceToken, stateFile, sharing);
 Application.Run(context);
 
@@ -40,9 +55,25 @@ static AgentState LoadState(string path)
     try
     {
         var json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<AgentState>(json) ?? new AgentState(null, null);
+        return JsonSerializer.Deserialize<AgentState>(json) ?? new AgentState(null, null, false);
     }
-    catch { return new AgentState(null, null); }
+    catch { return new AgentState(null, null, false); }
+}
+
+static void SaveState(string path, AgentState state) => File.WriteAllText(path, JsonSerializer.Serialize(state));
+
+static void SetStartWithWindows(bool enabled)
+{
+    try
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
+        if (key is null) return;
+        var exe = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(exe)) return;
+        if (enabled) key.SetValue("My-Level", $"\"{exe}\"");
+        else key.DeleteValue("My-Level", false);
+    }
+    catch { }
 }
 
 static string? PromptText(string title, string text, string defaultValue)
@@ -109,8 +140,8 @@ sealed class AgentContext : ApplicationContext
     {
         MessageBox.Show(
             sharing
-                ? "My-Level is running in the background.\n\nScreen sharing is ON.\n\nUse the My-Level admin page to view this authorized computer.\n\nTo stop sharing completely, choose Exit My-Level from the tray menu."
-                : "My-Level is running in the background.\n\nScreen sharing is OFF.",
+                ? "My-Level is running in the background.\n\nScreen sharing is ON.\n\nUse the My-Level admin page to view this authorized computer.\n\nTo stop sharing completely, choose Exit My-Level from the tray menu.":
+                "My-Level is running in the background.\n\nScreen sharing is OFF.",
             "My-Level",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);
@@ -158,7 +189,7 @@ sealed class AgentContext : ApplicationContext
                         return;
                     }
                     deviceToken = registeredToken;
-                    SaveState(stateFile, new AgentState(deviceId, deviceToken));
+                    SaveState(stateFile, new AgentState(deviceId, deviceToken, sharing));
                 }
                 else
                 {
@@ -270,8 +301,6 @@ sealed class AgentContext : ApplicationContext
         return value.TryGetProperty(property, out var item) && item.ValueKind == JsonValueKind.String ? item.GetString() : null;
     }
 
-    private static void SaveState(string path, AgentState state) => File.WriteAllText(path, JsonSerializer.Serialize(state));
-
     private static byte[] CaptureScreenJpeg()
     {
         var bounds = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1280, 720);
@@ -296,4 +325,4 @@ sealed class AgentContext : ApplicationContext
     }
 }
 
-record AgentState(string? DeviceId, string? DeviceToken);
+record AgentState(string? DeviceId, string? DeviceToken, bool SharingEnabled);
