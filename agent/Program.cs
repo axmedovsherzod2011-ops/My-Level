@@ -50,23 +50,24 @@ while (!stop.IsCancellationRequested)
         if (string.IsNullOrWhiteSpace(deviceToken))
         {
             await Send(ws, new { type = "agent.register", pairingCode, deviceId, name = Environment.MachineName, platform = "windows" }, stop.Token);
-            var registration = await ReceiveJson(ws, stop.Token);
-            if (registration?.type != "agent.registered" || string.IsNullOrWhiteSpace(registration.deviceToken))
+            var registration = await ReceiveUntilType(ws, "agent.registered", stop.Token);
+            var registeredToken = GetString(registration, "deviceToken");
+            if (registration is null || registeredToken is null)
             {
-                Console.WriteLine(registration?.message ?? "The server did not confirm registration.");
+                Console.WriteLine(GetString(registration, "message") ?? "The server did not confirm registration.");
                 return;
             }
-            deviceToken = registration.deviceToken;
+            deviceToken = registeredToken;
             SaveState(stateFile, new AgentState(deviceId, deviceToken));
             pairingCode = null;
         }
         else
         {
             await Send(ws, new { type = "agent.resume", deviceId, deviceToken }, stop.Token);
-            var resumed = await ReceiveJson(ws, stop.Token);
-            if (resumed?.type != "agent.connected")
+            var resumed = await ReceiveUntilType(ws, "agent.connected", stop.Token);
+            if (resumed is null)
             {
-                Console.WriteLine(resumed?.message ?? "Saved session could not be resumed. Pair this computer again.");
+                Console.WriteLine("Saved session could not be resumed. Pair this computer again.");
                 File.Delete(stateFile);
                 deviceToken = null;
                 Console.Write("Pairing code: ");
@@ -134,6 +135,19 @@ static async Task Send(ClientWebSocket ws, object value, CancellationToken cance
     await ws.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
 }
 
+static async Task<JsonElement?> ReceiveUntilType(ClientWebSocket ws, string expectedType, CancellationToken cancellationToken)
+{
+    while (!cancellationToken.IsCancellationRequested)
+    {
+        var message = await ReceiveJson(ws, cancellationToken);
+        if (message is null) return null;
+        var type = GetString(message, "type");
+        if (type == expectedType) return message;
+        if (type == "error") return message;
+    }
+    return null;
+}
+
 static async Task<JsonElement?> ReceiveJson(ClientWebSocket ws, CancellationToken cancellationToken)
 {
     var buffer = new byte[8192];
@@ -151,6 +165,12 @@ static async Task<JsonElement?> ReceiveJson(ClientWebSocket ws, CancellationToke
         }
         catch { return null; }
     }
+}
+
+static string? GetString(JsonElement? element, string property)
+{
+    if (element is not JsonElement value || value.ValueKind != JsonValueKind.Object) return null;
+    return value.TryGetProperty(property, out var item) && item.ValueKind == JsonValueKind.String ? item.GetString() : null;
 }
 
 static AgentState LoadState(string path)
