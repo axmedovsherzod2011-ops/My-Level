@@ -16,18 +16,22 @@
       <button id="generate" class="button">Generate pairing code</button>
       <div id="code" class="code">------</div>
       <p id="expires" class="muted"></p>
-      <div class="notice">Screen sharing will require an explicit action on the target PC.</div>
+      <div class="notice">Screen sharing requires an explicit action on the target PC.</div>
     </section>
   </main>
   <script>
+    const API_BASE = 'https://my-level-api.onrender.com';
     const button = document.querySelector('#generate');
     button.onclick = async () => {
       button.disabled = true;
       try {
-        const response = await fetch('/api/pairing-code', { method: 'POST' });
+        const response = await fetch(`${API_BASE}/api/pairing-code`, { method: 'POST' });
+        if (!response.ok) throw new Error('Unable to create code');
         const data = await response.json();
         document.querySelector('#code').textContent = data.code;
         document.querySelector('#expires').textContent = 'This code expires in 5 minutes and can be used once.';
+      } catch {
+        document.querySelector('#expires').textContent = 'Could not connect to My-Level. Please try again.';
       } finally { button.disabled = false; }
     };
   </script>
