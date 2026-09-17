@@ -23,9 +23,13 @@ jobs:
           s = p.read_text(encoding='utf-8')
           old = '''            var message = await ReceiveJson(ws, cancellationToken);\n            if (message is null) break;\n            var type = GetString(message, "type");\n            try\n            {\n                if (type == "webrtc.offer") await HandleOffer(ws, message, cancellationToken);\n                else if (type == "webrtc.candidate") HandleCandidate(message);'''
           new = '''            var message = await ReceiveJson(ws, cancellationToken);\n            if (message is null) break;\n            var value = message.Value;\n            var type = GetString(value, "type");\n            try\n            {\n                if (type == "webrtc.offer") await HandleOffer(ws, value, cancellationToken);\n                else if (type == "webrtc.candidate") HandleCandidate(value);'''
-          if old not in s:
-              raise SystemExit('Expected WebRTC receive-loop text was not found; no change made.')
-          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          if new in s:
+              print('Repair already applied; nothing to change.')
+          elif old in s:
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+              print('Applied nullable WebRTC repair.')
+          else:
+              raise SystemExit('WebRTC receive loop is neither in the old broken form nor the repaired form.')
 
       - name: Commit repair
         shell: bash
