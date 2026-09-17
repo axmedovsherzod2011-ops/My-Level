@@ -230,7 +230,9 @@ sealed class AgentContext : ApplicationContext
                         {
                             var frame = CaptureScreenJpeg();
                             await ws.SendAsync(frame, WebSocketMessageType.Binary, true, connectionStop.Token);
-                            await Task.Delay(250, connectionStop.Token);
+                            // Speed-first live mode: send up to ~10 frames/sec while
+                            // keeping the JPEG small enough for responsive WAN streaming.
+                            await Task.Delay(100, connectionStop.Token);
                         }
                         else
                         {
@@ -311,13 +313,13 @@ sealed class AgentContext : ApplicationContext
         using var output = new Bitmap(width, height, PixelFormat.Format24bppRgb);
         using (var graphics = Graphics.FromImage(output))
         {
-            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.InterpolationMode = InterpolationMode.Bilinear;
             graphics.DrawImage(source, new Rectangle(0, 0, width, height));
         }
         using var ms = new MemoryStream();
         var encoder = ImageCodecInfo.GetImageEncoders().First(e => e.FormatID == ImageFormat.Jpeg.Guid);
         using var parameters = new EncoderParameters(1);
-        parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 55L);
+        parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 50L);
         output.Save(ms, encoder, parameters);
         return ms.ToArray();
     }
