@@ -3,19 +3,54 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>My-Level Admin</title>
+  <meta name="theme-color" content="#f7f9fc">
+  <title>My-Level — Computers</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main class="shell">
-    <header class="topbar">
-      <div><div class="eyebrow">MY-LEVEL</div><h1>Computer Monitor</h1><p>Authorized devices</p></div>
-      <a class="button" href="/connect.html">Connect a PC</a>
+  <main class="app-shell">
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="My-Level home">
+        <span class="brand-mark">M</span>
+        <span>My-Level</span>
+      </a>
+      <nav class="nav-actions" aria-label="Main navigation">
+        <a class="nav-button active" href="/">Computers</a>
+        <a class="nav-button primary" href="/connect.html">＋ Add computer</a>
+        <button class="nav-button" id="refresh" type="button">↻ Refresh</button>
+        <button class="nav-button" id="help" type="button">? Help</button>
+        <button class="nav-button" id="settings" type="button">⚙ Settings</button>
+      </nav>
     </header>
-    <section class="card">
-      <div class="section-title"><h2>Connected computers</h2><span id="count">0</span></div>
-      <div id="devices" class="grid"><div class="empty">Loading...</div></div>
+
+    <section class="hero">
+      <div>
+        <div class="eyebrow">MY-LEVEL</div>
+        <h1>Your computers</h1>
+        <p>Manage your connected computers from one simple place.</p>
+      </div>
+      <div class="live-pill"><span></span> Live</div>
     </section>
+
+    <section class="stats" aria-label="Computer summary">
+      <div class="stat-card"><strong id="count">0</strong><span>Computers</span></div>
+      <div class="stat-card"><strong id="online">0</strong><span>Online now</span></div>
+      <div class="stat-card"><strong id="sharing">0</strong><span>Sharing screen</span></div>
+    </section>
+
+    <section class="content-card">
+      <div class="section-heading">
+        <div>
+          <h2>Connected computers</h2>
+          <p>Only computers you have authorized will appear here.</p>
+        </div>
+      </div>
+      <div id="devices" class="device-list">
+        <div class="empty"><div class="empty-icon">⌁</div><strong>Loading your computers…</strong></div>
+      </div>
+    </section>
+
+    <footer>My-Level · Private computer monitoring</footer>
   </main>
   <script src="/app.js"></script>
 </body>
