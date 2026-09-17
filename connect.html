@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Connect PC — My-Level</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell narrow">
+    <a href="/">← Admin dashboard</a>
+    <h1>Connect this PC</h1>
+    <p>Download the Windows Agent and enroll this computer with an administrator.</p>
+
+    <div class="card">
+      <h2>1. Download Agent</h2>
+      <button class="button" disabled>Windows Agent — coming next</button>
+      <p class="muted">The production installer will be signed and served only from this site.</p>
+    </div>
+
+    <div class="card">
+      <h2>2. Pairing</h2>
+      <button id="generate" class="button">Generate pairing code</button>
+      <div id="code" class="code">------</div>
+      <p id="expires" class="muted"></p>
+    </div>
+
+    <div class="notice">
+      Screen sharing will be opt-in and visibly indicated on the target PC.
+    </div>
+  </main>
+  <script>
+    document.querySelector("#generate").onclick = async () => {
+      const r = await fetch("/api/pairing-code", { method: "POST" });
+      const data = await r.json();
+      document.querySelector("#code").textContent = data.code;
+      document.querySelector("#expires").textContent =
+        "Expires in 10 minutes.";
+    };
+  </script>
+</body>
+</html>
