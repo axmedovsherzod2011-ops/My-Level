@@ -1,15 +1,47 @@
-# My-Level Windows Agent
+# My-Level
 
-This folder is the Windows background-agent starter.
+Consent-based remote screen monitoring MVP.
 
-The production agent should:
+## Structure
 
-1. Register the device after explicit enrollment.
-2. Maintain a secure WebSocket connection.
-3. Send heartbeats.
-4. Expose a visible tray/status indicator.
-5. Require an explicit user/admin action before screen sharing begins.
-6. Stop sharing immediately when the user disables it.
-7. Later publish the approved screen stream through WebRTC.
+```text
+My-Level/
+├─ server/          Node.js + Express + WebSocket server
+├─ web/             Admin dashboard and pairing page
+├─ agent/           Windows .NET 8 agent
+├─ shared/          Protocol and security docs
+├─ package.json
+└─ README.md
+```
 
-Do not turn the agent into a hidden recorder or add stealth/persistence designed to conceal monitoring.
+## Start the server
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000/`.
+
+## Pair a Windows PC
+
+1. Open `/connect.html` on the admin computer.
+2. Generate the one-time pairing code.
+3. On the authorized Windows PC, run the agent from `agent/`.
+4. Enter the pairing code.
+5. The PC should appear online in the dashboard.
+
+## Agent
+
+```powershell
+cd agent
+dotnet run
+```
+
+For a remote server, set `MY_LEVEL_SERVER` to the server WebSocket URL before starting the agent.
+
+## Current stage
+
+This version verifies the clean project structure, server health, WebSocket connection, one-time pairing, device listing, and heartbeats.
+
+Live screen streaming is intentionally not enabled yet. The next stage will add WebRTC plus Windows screen capture with explicit local authorization and a visible sharing indicator.
