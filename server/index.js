@@ -78,15 +78,22 @@ function broadcastDevices() {
   }
 }
 
+function sendJson(ws, value) {
+  if (ws?.readyState === 1) {
+    try { ws.send(JSON.stringify(value)); } catch {}
+  }
+}
+
 function attachAgent(ws, device) {
   if (device.ws && device.ws !== ws && device.ws.readyState === 1) {
     try { device.ws.close(1000, "Reconnected from another session"); } catch {}
   }
   device.ws = ws;
+  device.viewerWs = null;
   device.lastSeen = new Date().toISOString();
   ws.role = "agent";
   ws.deviceId = device.id;
-  ws.send(JSON.stringify({ type: "agent.connected", deviceId: device.id }));
+  sendJson(ws, { type: "agent.connected", deviceId: device.id });
   broadcastDevices();
 }
 
@@ -94,17 +101,7 @@ wss.on("connection", ws => {
   ws.role = "unknown";
   ws.on("error", () => {});
   ws.on("message", (raw, isBinary) => {
-    if (isBinary) {
-      if (ws.role !== "agent" || !ws.deviceId) return;
-      const device = devices.get(ws.deviceId);
-      if (!device || device.ws !== ws || !device.sharing) return;
-      for (const client of wss.clients) {
-        if (client.readyState === 1 && client.role === "admin" && client.viewDeviceId === ws.deviceId) {
-          try { client.send(raw, { binary: true }); } catch {}
-        }
-      }
-      return;
-    }
+    if (isBinary) return;
 
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -114,7 +111,7 @@ wss.on("connection", ws => {
       const pairing = pairingCodes.get(code);
       if (!pairing || pairing.expiresAt < Date.now()) {
         pairingCodes.delete(code);
-        ws.send(JSON.stringify({ type: "error", message: "Invalid or expired pairing code" }));
+        sendJson(ws, { type: "error", message: "Invalid or expired pairing code" });
         return;
       }
       pairingCodes.delete(code);
@@ -127,14 +124,15 @@ wss.on("connection", ws => {
         platform: "windows",
         lastSeen: new Date().toISOString(),
         sharing: false,
-        ws: null
+        ws: null,
+        viewerWs: null
       };
       device.owner = pairing.owner;
       device.name = String(msg.name || device.name || "Windows PC").slice(0, 100);
       device.platform = String(msg.platform || device.platform || "windows").slice(0, 30);
       devices.set(id, device);
       attachAgent(ws, device);
-      ws.send(JSON.stringify({ type: "agent.registered", deviceId: id, deviceToken: device.deviceToken }));
+      sendJson(ws, { type: "agent.registered", deviceId: id, deviceToken: device.deviceToken });
       return;
     }
 
@@ -143,7 +141,7 @@ wss.on("connection", ws => {
       const supplied = String(msg.deviceToken || "");
       const device = devices.get(id);
       if (!device || !supplied || supplied !== device.deviceToken) {
-        ws.send(JSON.stringify({ type: "error", message: "Agent session expired. Pair this computer again." }));
+        sendJson(ws, { type: "error", message: "Agent session expired. Pair this computer again." });
         try { ws.close(1008, "Pairing required"); } catch {}
         return;
       }
@@ -154,49 +152,118 @@ wss.on("connection", ws => {
     if (msg.type === "user.connect") {
       ws.role = "user";
       ws.owner = String(msg.ownerToken || "");
-      ws.send(JSON.stringify({ type: "devices", devices: [...devices.values()].filter(d => d.owner === ws.owner).map(publicDevice) }));
+      sendJson(ws, { type: "devices", devices: [...devices.values()].filter(d => d.owner === ws.owner).map(publicDevice) });
       return;
     }
 
     if (msg.type === "admin.connect" && msg.token && sessions.has(String(msg.token))) {
       ws.role = "admin";
-      ws.send(JSON.stringify({ type: "devices", devices: [...devices.values()].map(publicDevice) }));
+      sendJson(ws, { type: "devices", devices: [...devices.values()].map(publicDevice) });
       return;
     }
 
     if (msg.type === "admin.view" && ws.role === "admin") {
       const id = String(msg.deviceId || "");
       const device = devices.get(id);
+      if (ws.viewDeviceId && ws.viewDeviceId !== id) {
+        const old = devices.get(ws.viewDeviceId);
+        if (old?.viewerWs === ws) old.viewerWs = null;
+      }
       ws.viewDeviceId = device?.ws?.readyState === 1 && device.sharing ? id : null;
+      if (ws.viewDeviceId) device.viewerWs = ws;
       return;
     }
 
     if (msg.type === "admin.stop-view" && ws.role === "admin") {
+      const old = devices.get(ws.viewDeviceId);
+      if (old?.viewerWs === ws) sendJson(old.ws, { type: "webrtc.stop" });
+      if (old?.viewerWs === ws) old.viewerWs = null;
       ws.viewDeviceId = null;
       return;
     }
 
-    if (ws.role !== "agent" || !ws.deviceId) return;
-    const device = devices.get(ws.deviceId);
-    if (!device || device.ws !== ws) return;
-
-    if (msg.type === "agent.heartbeat") {
-      device.lastSeen = new Date().toISOString();
-      broadcastDevices();
+    if (msg.type === "webrtc.offer" && ws.role === "admin") {
+      const id = String(msg.deviceId || "");
+      const device = devices.get(id);
+      if (!device || device.viewerWs !== ws || !device.ws || device.ws.readyState !== 1 || !device.sharing) return;
+      sendJson(device.ws, { type: "webrtc.offer", sdp: String(msg.sdp || "") });
+      return;
     }
 
-    if (msg.type === "agent.sharing") {
-      device.sharing = Boolean(msg.active);
+    if (msg.type === "webrtc.candidate" && ws.role === "admin") {
+      const id = String(msg.deviceId || "");
+      const device = devices.get(id);
+      if (!device || device.viewerWs !== ws || !device.ws || device.ws.readyState !== 1) return;
+      sendJson(device.ws, { type: "webrtc.candidate", candidate: msg.candidate || null });
+      return;
+    }
+
+    if (msg.type === "webrtc.answer" && ws.role === "agent" && ws.deviceId) {
+      const device = devices.get(ws.deviceId);
+      if (!device || device.ws !== ws || !device.viewerWs) return;
+      sendJson(device.viewerWs, { type: "webrtc.answer", sdp: String(msg.sdp || "") });
+      return;
+    }
+
+    if (msg.type === "webrtc.candidate" && ws.role === "agent" && ws.deviceId) {
+      const device = devices.get(ws.deviceId);
+      if (!device || device.ws !== ws || !device.viewerWs) return;
+      sendJson(device.viewerWs, { type: "webrtc.candidate", candidate: msg.candidate || null });
+      return;
+    }
+
+    if (msg.type === "webrtc.error" && ws.role === "agent" && ws.deviceId) {
+      const device = devices.get(ws.deviceId);
+      if (!device || device.ws !== ws || !device.viewerWs) return;
+      sendJson(device.viewerWs, { type: "webrtc.error", message: String(msg.message || "WebRTC error") });
+      return;
+    }
+
+    if (msg.type === "agent.heartbeat" && ws.role === "agent" && ws.deviceId) {
+      const device = devices.get(ws.deviceId);
+      if (!device || device.ws !== ws) return;
       device.lastSeen = new Date().toISOString();
       broadcastDevices();
+      return;
+    }
+
+    if (msg.type === "agent.sharing" && ws.role === "agent" && ws.deviceId) {
+      const device = devices.get(ws.deviceId);
+      if (!device || device.ws !== ws) return;
+      device.sharing = Boolean(msg.active);
+      device.lastSeen = new Date().toISOString();
+      if (!device.sharing && device.viewerWs) {
+        sendJson(device.viewerWs, { type: "webrtc.error", message: "Screen sharing stopped on the agent." });
+        device.viewerWs = null;
+      }
+      broadcastDevices();
+      return;
+    }
+
+    if (msg.type === "webrtc.stop" && ws.role === "admin") {
+      const device = devices.get(ws.viewDeviceId);
+      if (device?.viewerWs === ws) {
+        sendJson(device.ws, { type: "webrtc.stop" });
+        device.viewerWs = null;
+      }
+      return;
     }
   });
 
   ws.on("close", () => {
+    if (ws.role === "admin") {
+      const device = devices.get(ws.viewDeviceId);
+      if (device?.viewerWs === ws) {
+        sendJson(device.ws, { type: "webrtc.stop" });
+        device.viewerWs = null;
+      }
+      return;
+    }
     if (ws.role !== "agent" || !ws.deviceId) return;
     const device = devices.get(ws.deviceId);
     if (device?.ws === ws) {
       device.ws = null;
+      device.viewerWs = null;
       device.sharing = false;
       device.lastSeen = new Date().toISOString();
       broadcastDevices();
