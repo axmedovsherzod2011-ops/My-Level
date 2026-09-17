@@ -1,0 +1,40 @@
+name: Build Windows Agent Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-agent:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish Windows Agent
+        run: dotnet publish agent/agent/MyLevel.Agent.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+
+      - name: Package Agent
+        shell: pwsh
+        run: Compress-Archive -Path publish/* -DestinationPath MyLevel-Agent-win-x64.zip -Force
+
+      - name: Publish latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: My-Level Agent (Latest)
+          body: Automated Windows x64 Agent build from main.
+          files: MyLevel-Agent-win-x64.zip
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
